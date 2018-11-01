@@ -3,21 +3,8 @@ import numpy as np
 from collections import defaultdict
 from heapq import heapify, heappush, heappop
 
-# load up all of the 19997 documents in the corpus
-corpus = sc.textFile ("s3://chrisjermainebucket/comp330_A6/20_news_same_line.txt")
-
-# each entry in validLines will be a line from the text file
-validLines = corpus.filter(lambda x : 'id' in x)
-
-# now we transform it into a bunch of (docID, text) pairs
-keyAndText = validLines.map(lambda x : (x[x.index('id="') + 4 : x.index('" url=')], x[x.index('">') + 2:]))
-
-# gets list of all documents
-allDocs = validLines.map(lambda x : x[x.index('id="') + 4 : x.index('" url=')]) 
-
-num_docs = -1
-
 def lab5():
+	global allDictWords, topWords
 	# now we split the text in each (docID, text) pair into a list of words
 	# after this, we have a data set with (docID, ["word1", "word2", "word3", ...])
 	# we have a bit of fancy regular expression stuff here to make sure that we do not
@@ -45,118 +32,158 @@ def lab5():
 	# the number will be the spot in the dictionary used to tell us where the word is located
 	# HINT: make use of topWords in the lambda that you supply
 	dictionary = twentyK.map (lambda num: (topWords[num][0] , num))
+	allDictWords = dictionary.map(lambda x: x[0])
 
 	# finally, print out some of the dictionary, just for debugging
 	dictionary.top (10)
 	return dictionary
 
-dictionary = lab5()
 
 def task1():
-	global corpus, validLines, keyAndText, dictionary, allDocs, num_docs
-	keyAndText.map
+	global corpus, validLines, keyAndText, dictionary, allDocs, num_docs, numWordsInDoc, 
+	allWordDocOccurrences, topWords
 		# now we split the text in each (docID, text) pair into a list of words
 	# after this, we have a data set with (docID, ["word1", "word2", "word3", ...])
 	# we have a bit of fancy regular expression stuff here to make sure that we do not
 	# die on some of the documents
 	regex = re.compile('[^a-zA-Z]')
+	# each entry looks like: (docID, ["word1", "word2", "word3", ...])
 	keyAndListOfWords = keyAndText.map(lambda x : (str(x[0]), regex.sub(' ', x[1]).lower().split()))
-	num_docs = len(keyAndListOfWords)
+	keyAndListOfWords = keyAndListOfWords.map(lambda x: (x[0], allDictWords.intersection(x[1])) ) 
+	# get rid of any words not in the dictionary
+
+	# TODO: can we intersect RDD with non-RDD? -- check this!!
+	num_docs = keyAndListOfWords.count()
 
 	null_word_counts = dictionary.flatMap(lambda x: (x, (doc,0)) for doc in allDocs)
 	
-	# now get the top 20,000 words... first change (docID, ["word1", "word2", "word3", ...])
-	# to ("word", (doc, 1))
+	# first change (docID, ["word1", "word2", "word3", ...]) to ("word", (doc, 1))
 	allWordDocOccurrences = keyAndListOfWords.flatMap(lambda x: (j, (x[0], 1)) for j in x[1])
+
+	numWordsInDoc = allWordDocOccurrences.map(lambda x: len(x[1])) 
+	# we use this ^ result for task 2
 
 	# to ("word", (doc, count))
 	allWordDocOccurrences = allWordDocOccurrences.union(null_word_counts)
 
 	# this gets us the form ("word", (totalCount, (doc, count) ))
-	wordPosDocPairs = dictionary.join(allWordDocOccurrences)
-	wordPosDocPairs = wordPosDocPairs.map(lambda x: ( (x[0], x[1][1][0]), (x[1][1], x[1][1][1] )))
-	# (("word",doc), (pos,count))
+	wordPosDocPairs = topWords.join(allWordDocOccurrences)
 
-	# (("word",doc), (pos,totalCount))
-	wordPosDocTotalPairs = wordPosDocPairs.reduceByKey(lambda x,y: (x[1][0], x[1][1] + y[1][1] ) )
+	# [(doc, [(totalCount1, (doc, count1)), ... ]), ...]
+	docCountTotCountGroupedByDoc = docCountTotCount.groupBy(lambda x: x[1][0]).collect()
 
-	# (doc, (pos,totalCount))
-	wordDocTotal = wordPosDocTotalPairs.map(lambda x: (x[0][1], x[1]))
+	# [(doc, [(totalCount1, (doc, count1)), ... ]), ...] --> sorted
+	docCountTotCount = wordPosDocPairs.map(lambda x: sorted(x[0], True))
 
-	# (doc, [(pos1, totalCount1),...]) 
-
-	# (doc, [totalCount1,...])
-	# TODO: do we want to represent this as a numpy array instead?
-
-
-
-
-	# # now get the top 20,000 words... first change (docID, ["word1", "word2", "word3", ...])
-	# # to (("word",doc), (pos, 1))
-	# allWordDocOccurrences = keyAndListOfWords.flatMap(lambda x: ((j, x[0]), 1) for j in x[1])
-
-	# # get form
-	# null_word_counts = dictionary.flatMap(lambda x: ((x[0],doc), (x[1], 0)) for doc in allDocs)
-
-	# wordPosDocPairs = dictionary.rightOuterJoin(allWordDocOccurrences)
-	# # ("word",(pos, (doc,1) ) )
-	# wordPosDocPairs = wordPosDocPairs.union(null_word_counts)
-	# # add all null word counts
-
-	# wordPosDocTotalPairs = wordPosDocPairs.reduceByKey(lambda x,y: (x[0], (x[1][0], x[1][1] + y[1][1]) ) )
+	# [(doc, [ count1, ... ]), ...] --> interior list is sorted
+	docAndFrequencies = docCountTotCount.map(lambda x: map(x[1], lambda tup: tup[1][1]))
+	
+	results = docAndFrequencies.filter(lamdba x: x[0] in titles).collect()
+	print(results[0])
+	print(results[1])
+	print(results[2])
+	
+	return docAndFrequencies
 
 
 def task2():
-	global num_docs
-	# For calculating TF(i, d)
-	# (doc, (pos,totalCount))
-	# (doc, numWords)
+	global num_docs, docAndFrequencies, numWordsInDoc,
+	 allWordDocOccurrences, dictionary, sortedWordDocOccurrences, topWords, IDF, titles_of_interest
+
+	# array [(doc,([count1,...],numWordsTotal)), ...]
+	pre_TF_d = docAndFrequencies.join(numWordsInDoc)
+
+	# TF vector
+	TF_d = pre_TF_d.map(lambda x:  (x[0], np.array(x[1][0] / (x[1][1] * 1.))) )
 
 
-	# get IDF vector
-	# Need a d by i matrix consisting of counts per document
+	# trim all counts to 0 or 1. 
+	#gets us an rdd of form ("word", 1 or 0)
+	wordDocSingleOccurrences = allWordDocOccurrences.map(lambda x: (x[0], (x[1] > 1) * 1 ))
+	wordDocOccurences = wordDocSingleOccurrences.reduceByKey(lambda x,y: x + y)
 
-def insert_heap(k, score_heap, elem):
-	""""""
-	# (see following link) https://www.geeksforgeeks.org/heap-queue-or-heapq-in-python/
-	heappush(li,elem)
-	if len(score_heap) > k:
-		heappop(li)
+	#gets us an rdd of form [("word", (totalDoc, totalCount)]
+	sortedWordDocOccurrences = dictionary.join(wordDocOccurences)
 
+	#gets us an rdd of form [(totalCount,("word",totalDoc)), ...]
+	sortedWordDocOccurrences = sortedWordDocOccurrences.map(
+		lambda x: (x[1][1],(x[0],x[1][0])) ).sortByKey(ascending = False)
+
+	#gets us an rdd of form [totalWordDoc1, ...]
+	sortedWordDocOccurrences = sortedWordDocOccurrences.map(lambda x: x[1][1])
+
+	#gets us an rdd of form [IDF(1), IDF(2) ...]
+	IDF = sortedWordDocOccurrences.map(lambda x: math.log(x / (num_docs * 1.)))
+
+	TF_IDF = TF_d.map(lambda x: (x, x[1] * IDF))
+
+	results = TF_IDF.filter(lamdba x: x[0] in titles).collect()
+	print(results[0])
+	print(results[1])
+	print(results[2])
+	return TF_IDF
+
+
+def calc_l2_norm(arr1, arr2):
+	diff =  math.abs(arr1 - arr2)**2
+	return math.pow(diff, .5)
+
+def get_cat(title):
+	category = title.split("/")[1]
+	return category
 
 def task3(in_string, k):
 	""""""
-
+	global dictionary, allDictWords, topWords, IDF, TF_IDF
 	# need list [category of doc 1,...]
 	# need list [cat1 frequency, ...]
 
 	# possibly create function that will take in text 
 	# and construct a list of dictionary word frequencies
+	rgx = '[a-zA-Z\']+'
+	sampleWords = sc.parallelize(re.findall(rgx, in_string))
 
+	numWordsInSample = sampleWords.count()
+
+	sampleWords = sampleWords.intersection(allDictWords)
+
+	sampleWords = sampleWords.map(lambda x: (x, 1))
+
+	sampleWords = sampleWords.union(allDictWords.map(lambda x: (x, 0)))
+
+	# should get you [(word,(total, thisCount)),...]
+	sampleWords = topWords.join(sampleWords)
 
 	# calculate the word frequencies of the current text string
-	curr_freq = 
+	# gets you [(word1,(total, count)),...]
+	curr_freq = sampleWords.reduceByKey(lamdbda x,y: (x[0], x[1] + y[1]))
 
-	# create a heap of elements of form (score, cat_id) -- ACTUALLY PROBABLY NOT GONNA DO THIS
-	# score_heap = [] 
+	# gets you [(total, count),...]
+	curr_freq = curr_freq.map(lambda x: x[1])
 
-	# insert into the heap 
-	# for :
-	# 	# iterate through categories
-	# 	doc_freq = 
-	# 	insert_pair = (l2_norm(doc_freq, curr_freq), ) # (l2norm, cat)
-	# 	insert_heap(k, score_heap, insert_pair)
+	# gets you [(total, count),...] sorted
+	curr_freq = curr_freq.sortByKey(ascending = False)
+	
+	# gets you [count,...]
+	curr_freq = curr_freq.map(lambda x: x[1])	
 
+	
+	this_tf = np.array(curr_freq) / (numWordsInSample * 1.)
 
-	# sort the heap by decreasing score
-	sort(score_heap)
+	this_tf_idf = this_tf * IDF
 
-	# check for any ties in the heap
-	map_scores = defaultdict(int)
+	l2_norm = TF_IDF.map(lambda x: calc_l2_norm(x[1],this_tf_idf))
+
+	# organize by norm so we can pick top ones
+	rev_l2_norm = l2_norm.map(lambda x: (x[1], x[0]))
+
+	topk = rev_l2_norm.top(k)
+
+	cat_count = defaultdict(int)
 	max_score = -1
 
-	for pair in score_heap:
-		map_scores[pair[1]] += 1
+	for pair in topk:
+		cat_count[get_cat(pair[1])] += 1
 		if max_score < pair[0]:
 			max_score = pair[0]
 
@@ -168,7 +195,7 @@ def task3(in_string, k):
 	pick_cat = None
 	if len(all_max_cat) > 1:
 		# tie breaking
-		for i in score_heap:
+		for i in topk:
 			if i[1] in all_max_cat:
 				pick_cat = i[1]
 				break
@@ -178,6 +205,10 @@ def task3(in_string, k):
 		pick_cat = all_max_cat[0]
 	else:
 		print("No max categories")
+		return None
+
+	print("Final category: %s" % pick_cat)
+	return pick_cat 
 
 
 
@@ -188,3 +219,42 @@ def l2_norm(countsA, countsB):
 
 	diff_sum = np.sum(differences)
 	return math.pow(diff_sum, .5)
+
+# load up all of the 19997 documents in the corpus
+corpus = sc.textFile ("s3://chrisjermainebucket/comp330_A6/20_news_same_line.txt")
+
+# each entry in validLines will be a line from the text file
+validLines = corpus.filter(lambda x : 'id' in x)
+
+# now we transform it into a bunch of (docID, text) pairs
+keyAndText = validLines.map(lambda x : (x[x.index('id="') + 4 : x.index('" url=')], x[x.index('">') + 2:]))
+
+# gets list of all documents
+allDocs = validLines.map(lambda x : x[x.index('id="') + 4 : x.index('" url=')]) 
+
+# to [("word", (doc, count)),...]
+allWordDocOccurrences = None
+
+num_docs = -1
+
+allDictWords = None
+
+topWords = None
+
+sortedWordDocOccurrences = None
+
+IDF = None # we'll assign this later
+
+titles_of_interest = ["20 newsgroups/sci.med/58763","20 newsgroups/talk.politics.mideast/75944", "20_newsgroups/comp.graphics/37261"]
+
+dictionary = lab5()
+
+docAndFrequencies = task1()
+
+# [(doc,TF_IDF(i) vector), ...]
+TF_IDF = task2()
+# ATTENTION!!! IF YOU RUN INTO ANY ERRORS, CHECK THE TODO SECTIONS FIRST!!
+
+
+task3()
+
